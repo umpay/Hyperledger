@@ -1,0 +1,97 @@
+此文档用于公司内部使用（主要是镜像服务器依赖问题）
+
+1.配置私服环境：    
+系统环境：ubuntu 14.04
+ sudo usermod -aG docker mpsp 加入docker组
+
+添加私服地址
+sudo vi /etc/default/docker
+
+  # Docker Upstart and SysVinit configuration file
+
+  # Customize location of Docker binary (especially for development testing).
+  #DOCKER="/usr/local/bin/docker"
+
+  # Use DOCKER_OPTS to modify the daemon startup options.
+  DOCKER_OPTS="--dns 8.8.8.8 --dns 8.8.4.4  --insecure-registry 10.10.67.225:5000"
+
+  # If you need Docker to use an HTTP proxy, it can also be specified here.
+  #export http_proxy="http://127.0.0.1:3128/"
+
+  # This is also a handy place to tweak where Docker's temporary files go.
+  #export TMPDIR="/mnt/bigdrive/docker-tmp"
+
+配置完私服之后，需要重启docker服务。
+
+2.从配置好的私服（10.10.67.225 ）上下载镜像文件：
+     创建pull.sh 脚本文件：
+     
+          echo "start to pull images"
+          docker pull 10.10.67.225:5000/jerry/fabric-peer:jerry-20161013
+          docker pull 10.10.67.225:5000/jerry/fabric-membersrvc:jerry-20161013
+          docker pull 10.10.67.225:5000/jerry/fabric-baseimage:jerry-20161013
+
+          echo "=================="
+          echo "tag it"
+          docker tag 10.10.67.225:5000/jerry/fabric-peer:jerry-20161013 yeasy/hyperledger-peer:latest
+          docker tag 10.10.67.225:5000/jerry/fabric-membersrvc:jerry-20161013 yeasy/hyperledger-membersrvc:latest
+          docker tag 10.10.67.225:5000/jerry/fabric-baseimage:jerry-20161013 hyperledger/fabric-baseimage:latest
+
+（注：由于超级账本docker环境的限制，在镜像重命名时，fabric-baseimage 镜像一定要修改为 hyperledger/fabric-baseimage:latest ；否则系统容器在启动时会找不到依赖的基础镜像）
+
+     脚本创建完成后，使用：chmod 777 pull.sh  赋权。并执行此脚本拉取镜像文件。
+
+
+3.下载docker-compose文件：
+
+     地址：https://github.com/yeasy/docker-compose-files
+     通过git clone 方式下载后，修改目录下相应的配置：
+     
+     git clone https://github.com/yeasy/docker-compose-files.git
+     
+
+4.修改配置文件并启动集群：
+
+     修改docker-compose-files/hyperledger/pbft 下的配置文件
+     
+     修改 peer-pbft.yml 中 peer 镜像（更改为pull下来重命名的镜像名称，即 yeasy/hyperledger-peer:latest ）
+
+     修改 docker-compose-with-membersrvc.yml 中的 membersrvc 镜像 （更改为pull下来重命名的镜像名称，即yeasy/hyperledger-membersrvc:latest ）
+
+
+
+修改完成后，可使用一下命令启动节点集群：（注：需要在pbft 文件下执行该命令）
+
+     docker-compose -f docker-compose-with-membersrvc.yml up
+
+（注：不修改的情况下，会去下载默认镜像）
+5.部署合约并调用合约方法：
+     
+在服务器中执行一下curl命令部署合约（以转账合约为例）：
+
+${IP地址} ☞服务器的ip地址
+
+注册账户，并以 jim 账户登录
+curl -i -X POST -H "Content-Type: application/json" http://${IP地址}:7050/registrar -d '{"enrollId":"jim","enrollSecret":"6avZQLwcUe9b"}'
+
+
+部署合约，并初始化 a、b 两个账户
+curl -i -X POST -H "Content-Type: application/json" http://${IP地址}:7050/chaincode -d '{"jsonrpc":"2.0","method":"deploy","params":{"type":1,"chaincodeID":{"path":"github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02"},"ctorMsg":{"function":"init","args":["a","100","b","200"]},"secureContext":"jim"},"id":1}'
+
+会返回一个合约地址：例：a5389f7dfb9efae379900a41db1503fea2199fe400272b61ac5fe7bd0c6b97cf10ce3aa8dd00cd7626ce02f18accc7e5f2059dae6eb0786838042958352b89fb
+
+转账(通过别名或合约地址)
+curl -i -X POST -H "Content-Type: application/json" http://192.168.198.130:7050/chaincode -d '{"jsonrpc":"2.0","method":"invoke","params":{"type":1,"chaincodeID":{"name":"a5389f7dfb9efae379900a41db1503fea2199fe400272b61ac5fe7bd0c6b97cf10ce3aa8dd00cd7626ce02f18accc7e5f2059dae6eb0786838042958352b89fb "},"ctorMsg":{"function":"invoke","args":["a","b","10"]},"secureContext":"jim"},"id":3}'
+
+11beeebc-3921-4ceb-8e47-263904ba7c5c
+
+查询参数
+curl -i -X POST -H "Content-Type: application/json" http://192.168.198.130:7050/chaincode -d '{"jsonrpc": "2.0","method": "query","params": {"type": 1,"chaincodeID":{"name":"a5389f7dfb9efae379900a41db1503fea2199fe400272b61ac5fe7bd0c6b97cf10ce3aa8dd00cd7626ce02f18accc7e5f2059dae6eb0786838042958352b89fb "},"ctorMsg": {"function":"query","args":["a"]},"secureContext": "jim"},"id": 5}'
+
+（注：部署不同的合约，或同一个合约中的参数不同（包括字母大小写）都会生产不同的合约地址）
+
+6.通过浏览器访问区块链相关信息：
+
+
+	1. http://${ip地址}:7050/chain 查询链的高度
+	2. http://${ip 地址}:7050/chain/blocks/${块编号} 查询指定块中的信息
